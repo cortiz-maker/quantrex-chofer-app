@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "783228529556",
+    "project_id": "quantrex-chofer",
+    "storage_bucket": "quantrex-chofer.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:783228529556:android:b1ea65881a6e0f5c13bd81",
+        "android_client_info": {
+          "package_name": "cl.quantrex.chofer"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBZDl-vksnknU4mwpMi4GYJCxOdOVOIvgA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

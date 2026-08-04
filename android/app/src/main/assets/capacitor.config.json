@@ -1,0 +1,14 @@
+{
+	"appId": "cl.quantrex.chofer",
+	"appName": "Quantrex Chofer",
+	"webDir": "dist",
+	"android": {
+		"allowMixedContent": false,
+		"useLegacyBridge": true
+	},
+	"plugins": {
+		"CapacitorHttp": {
+			"enabled": true
+		}
+	}
+}
