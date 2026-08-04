@@ -25,6 +25,16 @@ function formatTiempo(seg) {
   return `${s}s`;
 }
 
+// Mismo mapeo que TYPE_META en la app principal — para que el chofer pueda
+// distinguir a simple vista si es una entrega, un retiro, una carga OL o una
+// devolución (antes no se mostraba en ningún lado de esta app).
+const TYPE_META = {
+  entrega:   { label: "Entrega / Despacho",                  icon: "↓", color: "#22C55E" },
+  carga_ol:  { label: "Carga Operador Logístico",             icon: "⬆", color: "#00AEEF" },
+  li_retiro: { label: "Retiro de Carga",                      icon: "↩", color: "#F59E0B" },
+  li_devol:  { label: "Devolución",                           icon: "↪", color: "#A78BFA" },
+};
+
 export default function VistaChofer({ chofer, solicitudes, onCerrado, onSalir }) {
   const [seleccionada, setSeleccionada] = useState(null);
   const [cargando, setCargando] = useState(null);
@@ -233,11 +243,17 @@ export default function VistaChofer({ chofer, solicitudes, onCerrado, onSalir })
         const arrFotos = esCargaOL ? fotosManifiesto[s.id] || [] : fotos[s.id] || [];
         const fotosOk = arrFotos.length >= 1;
         const firmaOk = !!firmas[s.id];
+        const tm = TYPE_META[s.tipo] || { label: s.tipo || "—", icon: "·", color: "#6B8CAE" };
 
         return (
           <div key={s.id} style={{ background: "#0F1D30", border: "1px solid " + (abierta ? "#00AEEF" : "#2A3F5C"), borderRadius: 12, overflow: "hidden", marginBottom: 12 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 16px", cursor: "pointer" }} onClick={() => setSeleccionada(abierta ? null : s.id)}>
               <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                  <span style={{ background: tm.color + "22", border: "1px solid " + tm.color, color: tm.color, borderRadius: 6, padding: "2px 8px", fontSize: 11, fontWeight: 800 }}>
+                    {tm.icon} {tm.label}
+                  </span>
+                </div>
                 <div style={{ fontWeight: 700, fontSize: 14 }}>{s.titulo}</div>
                 <div style={{ fontSize: 12, color: "#00AEEF", fontWeight: 700, marginTop: 2 }}>N° Solicitud: {s.ot || s.id}</div>
                 {s.direccion && <div style={{ fontSize: 12, color: "#9AB0C9", marginTop: 2 }}>📍 {s.direccion}</div>}
