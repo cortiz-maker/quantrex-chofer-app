@@ -38,4 +38,21 @@
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- Ubicación: sin ACCESS_BACKGROUND_LOCATION, Android nunca ofrece la
+         opción "Permitir todo el tiempo" en el diálogo de permisos, aunque el
+         plugin de background-geolocation esté instalado. -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
+
+    <!-- Foreground service: necesario para que el tracking sobreviva con la
+         pantalla bloqueada. FOREGROUND_SERVICE_LOCATION es obligatorio desde
+         Android 14 (API 34) para servicios de tipo "location". -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+
+    <!-- Evita que el sistema suspenda la CPU mientras el servicio de
+         ubicación sigue corriendo en segundo plano. -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
 </manifest>
