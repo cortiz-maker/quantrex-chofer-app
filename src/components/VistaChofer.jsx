@@ -36,20 +36,113 @@ const TYPE_META = {
 };
 
 export default function VistaChofer({ chofer, solicitudes, onCerrado, onSalir }) {
+  // ── Persistencia del borrador de cierre (frente 4.1 — bug crítico) ────────
+  // Antes, fotos/firma/llegada/observación vivían solo en memoria (useState):
+  // si la app se cerraba o desloguea a mitad del cierre, todo eso se perdía y
+  // había que empezar de cero. Ahora se guarda en localStorage (persistente en
+  // el WebView de Android, sobrevive a cierre de app y logout) y se restaura
+  // al volver a entrar. Se guarda por chofer, y por solicitud dentro de eso.
+  const DRAFT_KEY = `qtx_chofer_draft_${chofer.nombre}`;
+  const draftInicialRef = useRef(null);
+  if (draftInicialRef.current === null) {
+    try {
+      draftInicialRef.current = JSON.parse(localStorage.getItem(DRAFT_KEY) || "{}");
+    } catch {
+      draftInicialRef.current = {};
+    }
+  }
+  function extraerCampoDraft(campo) {
+    const out = {};
+    const draft = draftInicialRef.current || {};
+    for (const id in draft) {
+      if (draft[id] && draft[id][campo] != null) out[id] = draft[id][campo];
+    }
+    return out;
+  }
+
   const [seleccionada, setSeleccionada] = useState(null);
   const [cargando, setCargando] = useState(null);
-  const [fotos, setFotos] = useState({});
-  const [fotosManifiesto, setFotosManifiesto] = useState({});
-  const [firmas, setFirmas] = useState({});
-  const [observaciones, setObservaciones] = useState({});
-  const [documentosGD, setDocumentosGD] = useState({});
-  const [llegadas, setLlegadas] = useState({});
+  const [fotos, setFotos] = useState(() => extraerCampoDraft("fotos"));
+  const [fotosManifiesto, setFotosManifiesto] = useState(() => extraerCampoDraft("fotosManifiesto"));
+  const [firmas, setFirmas] = useState(() => extraerCampoDraft("firma"));
+  const [observaciones, setObservaciones] = useState(() => extraerCampoDraft("observacion"));
+  const [documentosGD, setDocumentosGD] = useState(() => extraerCampoDraft("documentoGD"));
+  const [llegadas, setLlegadas] = useState(() => extraerCampoDraft("llegada"));
   const [tiempos, setTiempos] = useState({});
   const [errorValidacion, setErrorValidacion] = useState(null);
   const [modalFirma, setModalFirma] = useState(null);
   const timerRef = useRef({});
 
   useEffect(() => () => Object.values(timerRef.current).forEach(clearInterval), []);
+
+  // Reescribe el borrador local completo cada vez que cambia cualquier pieza
+  // del cierre en curso. Si alguna solicitud se cerró (y su estado ya fue
+  // limpiado por cerrar()), simplemente deja de aparecer en el draft nuevo.
+  useEffect(() => {
+    const draft = {};
+    const ids = new Set([
+      ...Object.keys(fotos), ...Object.keys(fotosManifiesto), ...Object.keys(firmas),
+      ...Object.keys(observaciones), ...Object.keys(documentosGD), ...Object.keys(llegadas),
+    ]);
+    ids.forEach((id) => {
+      draft[id] = {
+        fotos: fotos[id] || [],
+        fotosManifiesto: fotosManifiesto[id] || [],
+        firma: firmas[id] || null,
+        observacion: observaciones[id] || "",
+        documentoGD: documentosGD[id] || "",
+        llegada: llegadas[id] || null,
+      };
+    });
+    try {
+      localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+    } catch (e) {
+      // Puede fallar por cuota (muchas fotos pendientes a la vez). No es
+      // crítico: el cierre en curso sigue funcionando en memoria, solo no
+      // quedaría protegido ante un cierre inesperado de la app en ese instante.
+      console.error("No se pudo guardar el borrador local del cierre:", e);
+    }
+  }, [fotos, fotosManifiesto, firmas, observaciones, documentosGD, llegadas, DRAFT_KEY]);
+
+  // Al montar (o si cambian las solicitudes vigentes), retoma el cronómetro
+  // de cualquier llegada restaurada desde el borrador que aún no tenga un
+  // intervalo corriendo — así el tiempo en punto sigue contando desde la
+  // hora real de llegada, no desde que se reabrió la app.
+  useEffect(() => {
+    const idsVigentes = new Set(solicitudes.map((s) => s.id));
+    Object.keys(llegadas).forEach((id) => {
+      if (!idsVigentes.has(id)) return;
+      if (timerRef.current[id]) return;
+      const llegada = llegadas[id];
+      if (!llegada || !llegada.timestamp) return;
+      setTiempos((p) => ({ ...p, [id]: Math.floor((Date.now() - llegada.timestamp) / 1000) }));
+      timerRef.current[id] = setInterval(() => {
+        setTiempos((p) => ({ ...p, [id]: Math.floor((Date.now() - llegada.timestamp) / 1000) }));
+      }, 1000);
+    });
+  }, [llegadas, solicitudes]);
+
+  // Refs que reflejan siempre el último valor de solicitudes/llegadas, para
+  // leerlos dentro del callback del watcher de GPS (más abajo) sin tener que
+  // reiniciar el watcher cada vez que cambian — reiniciarlo perdería el
+  // estado interno del plugin nativo innecesariamente.
+  const solicitudesRef = useRef(solicitudes);
+  useEffect(() => { solicitudesRef.current = solicitudes; }, [solicitudes]);
+  const llegadasRef = useRef(llegadas);
+  useEffect(() => { llegadasRef.current = llegadas; }, [llegadas]);
+
+  // Marca la llegada automáticamente por geocerca (frente 4.2), con el mismo
+  // efecto que tocar "Llegué al punto de entrega" a mano. La comprobación
+  // `if (prev[solId]) return prev` evita duplicar el registro si el GPS
+  // entrega dos lecturas dentro del radio antes de que el estado se actualice.
+  function registrarLlegadaAuto(solId, lat, lng) {
+    setLlegadas((prev) => {
+      if (prev[solId]) return prev;
+      const now = new Date();
+      const hora = now.toLocaleDateString("es-CL") + " " + now.toLocaleTimeString("es-CL", { hour: "2-digit", minute: "2-digit", hour12: false });
+      return { ...prev, [solId]: { hora, timestamp: now.getTime(), geo: lat.toFixed(6) + "," + lng.toFixed(6), automatica: true } };
+    });
+  }
 
   // ── GPS en segundo plano real ────────────────────────────────────────────
   // A diferencia de la Fase 1 (Geolocation.watchPosition, que se corta con la
@@ -98,6 +191,21 @@ export default function VistaChofer({ chofer, solicitudes, onCerrado, onSalir })
           velocidad_kmh: speed != null ? Math.max(0, speed * 3.6) : null,
           precision_m: accuracy ?? null,
           timestamp_captura: new Date().toISOString(),
+        });
+
+        // Geocerca automática (frente 4.2): si el chofer entra a ≤500m del
+        // destino de una solicitud pendiente que aún no tiene llegada
+        // registrada, se marca sola — igual que el botón manual. Solo actúa
+        // sobre solicitudes que ya tienen coordenadas geocodificadas
+        // (destinoLat/destinoLng); si la solicitud no las tiene (dirección
+        // sin geocodificar todavía), no hace nada y el botón manual sigue
+        // disponible como respaldo, sin romper el flujo.
+        const RADIO_GEOCERCA_M = 500;
+        solicitudesRef.current.forEach((sol) => {
+          if (llegadasRef.current[sol.id]) return;
+          if (typeof sol.destinoLat !== "number" || typeof sol.destinoLng !== "number") return;
+          const d = distM(latitude, longitude, sol.destinoLat, sol.destinoLng);
+          if (d <= RADIO_GEOCERCA_M) registrarLlegadaAuto(sol.id, latitude, longitude);
         });
       }
     ).then((id) => {
@@ -274,7 +382,9 @@ export default function VistaChofer({ chofer, solicitudes, onCerrado, onSalir })
                   </button>
                 ) : (
                   <div style={{ background: "#0A1628", border: "1px solid #00AEEF", borderRadius: 10, padding: "8px 14px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                    <div style={{ fontSize: 11, color: "#00AEEF", fontWeight: 700 }}>EN PUNTO DE ENTREGA · {llegadas[s.id].hora}</div>
+                    <div style={{ fontSize: 11, color: "#00AEEF", fontWeight: 700 }}>
+                      EN PUNTO DE ENTREGA{llegadas[s.id].automatica ? " · AUTO" : ""} · {llegadas[s.id].hora}
+                    </div>
                     <div style={{ fontSize: 16, fontWeight: 900, color: "#00AEEF", fontFamily: "monospace" }}>{formatTiempo(tiempos[s.id] || 0)}</div>
                   </div>
                 )}
@@ -314,7 +424,7 @@ export default function VistaChofer({ chofer, solicitudes, onCerrado, onSalir })
                 ) : (
                   <div style={{ background: "#0A1628", border: "1px solid #00AEEF", borderRadius: 10, padding: "10px 14px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                     <div>
-                      <div style={{ fontSize: 11, color: "#00AEEF", fontWeight: 700 }}>EN PUNTO DE ENTREGA</div>
+                      <div style={{ fontSize: 11, color: "#00AEEF", fontWeight: 700 }}>EN PUNTO DE ENTREGA{llegadas[s.id].automatica ? " · AUTO" : ""}</div>
                       <div style={{ fontSize: 11, color: "#9AB0C9", marginTop: 2 }}>Llegada: {llegadas[s.id].hora}</div>
                     </div>
                     <div style={{ fontSize: 22, fontWeight: 900, color: "#00AEEF", fontFamily: "monospace" }}>{formatTiempo(tiempos[s.id] || 0)}</div>
