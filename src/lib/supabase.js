@@ -92,7 +92,7 @@ export async function loadSolicitudesChofer(choferNombre, ppu) {
     "GET",
     "solicitudes",
     "",
-    `?select=id,ot,tipo,titulo,descripcion,direccion,fecha,hora,contacto,guia,destino,status,documentos,notas,ppu_asignada,chofer_asignado&fecha=eq.${hoy}&status=in.(pendiente,en_proceso)`
+    `?select=id,ot,tipo,titulo,descripcion,direccion,fecha,hora,contacto,guia,destino,status,documentos,notas,ppu_asignada,chofer_asignado,destino_lat,destino_lng&fecha=eq.${hoy}&status=in.(pendiente,en_proceso)`
   );
   if (!data) return [];
   return data
@@ -112,6 +112,8 @@ export async function loadSolicitudesChofer(choferNombre, ppu) {
       status: s.status,
       documentos: s.documentos,
       notas: s.notas,
+      destinoLat: typeof s.destino_lat === "number" ? s.destino_lat : null,
+      destinoLng: typeof s.destino_lng === "number" ? s.destino_lng : null,
     }));
 }
 
