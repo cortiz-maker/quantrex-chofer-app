@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { Geolocation } from "@capacitor/geolocation";
 import { Camera, CameraResultType, CameraSource } from "@capacitor/camera";
 import { registerPlugin } from "@capacitor/core";
-import { sbInsertTracking, cerrarSolicitud, actualizarEstadoSolicitud } from "../lib/supabase";
+import { sbInsertTracking, cerrarSolicitud, actualizarEstadoSolicitud, registrarLlegadaPunto } from "../lib/supabase";
 import ModalFirma from "./ModalFirma.jsx";
 
 const BackgroundGeolocation = registerPlugin("BackgroundGeolocation");
@@ -29,10 +29,10 @@ function formatTiempo(seg) {
 // distinguir a simple vista si es una entrega, un retiro, una carga OL o una
 // devolución (antes no se mostraba en ningún lado de esta app).
 const TYPE_META = {
-  entrega:   { label: "Entrega / Despacho",                  icon: "↓", color: "#22C55E" },
-  carga_ol:  { label: "Carga Operador Logístico",             icon: "⬆", color: "#00AEEF" },
-  li_retiro: { label: "Retiro de Carga",                      icon: "↩", color: "#F59E0B" },
-  li_devol:  { label: "Devolución",                           icon: "↪", color: "#A78BFA" },
+  entrega: { label: "Entrega / Despacho", icon: "↓", color: "#22C55E" },
+  carga_ol: { label: "Carga Operador Logístico", icon: "⬆", color: "#00AEEF" },
+  li_retiro: { label: "Retiro de Carga", icon: "↩", color: "#F59E0B" },
+  li_devol: { label: "Devolución", icon: "↪", color: "#A78BFA" },
 };
 
 export default function VistaChofer({ chofer, solicitudes, onCerrado, onSalir }) {
@@ -75,7 +75,7 @@ export default function VistaChofer({ chofer, solicitudes, onCerrado, onSalir })
 
   useEffect(() => () => Object.values(timerRef.current).forEach(clearInterval), []);
 
-  // Reescribe el borrador local completo cada vez que cambia cualquier pieza
+  // Reescribe el borrador local completo cada vez;que cambia cualquier pieza
   // del cierre en curso. Si alguna solicitud se cerró (y su estado ya fue
   // limpiado por cerrar()), simplemente deja de aparecer en el draft nuevo.
   useEffect(() => {
@@ -133,18 +133,31 @@ export default function VistaChofer({ chofer, solicitudes, onCerrado, onSalir })
 
   // Marca la llegada automáticamente por geocerca (frente 4.2), con el mismo
   // efecto que tocar "Llegué al punto de entrega" a mano. La comprobación
-  // `if (prev[solId]) return prev` evita duplicar el registro si el GPS
-  // entrega dos lecturas dentro del radio antes de que el estado se actualice.
+  // contra llegadasRef evita duplicar el registro si el GPS entrega dos
+  // lecturas dentro del radio antes de que el estado se actualice. Además de
+  // guardar el estado local (para el cronómetro visible al chofer), ahora
+  // también persiste "En Punto Cliente" en Supabase -- antes esta función
+  // solo tocaba estado local y nunca avisaba al servidor.
   function registrarLlegadaAuto(solId, lat, lng) {
+    if (llegadasRef.current[solId]) return;
+    const now = new Date();
+    const hora = now.toLocaleDateString("es-CL") + " " + now.toLocaleTimeString("es-CL", { hour: "2-digit", minute: "2-digit", hour12: false });
+    const geo = lat.toFixed(6) + "," + lng.toFixed(6);
     setLlegadas((prev) => {
       if (prev[solId]) return prev;
-      const now = new Date();
-      const hora = now.toLocaleDateString("es-CL") + " " + now.toLocaleTimeString("es-CL", { hour: "2-digit", minute: "2-digit", hour12: false });
-      return { ...prev, [solId]: { hora, timestamp: now.getTime(), geo: lat.toFixed(6) + "," + lng.toFixed(6), automatica: true } };
+      return { ...prev, [solId]: { hora, timestamp: now.getTime(), geo, automatica: true } };
+    });
+    const sol = solicitudesRef.current.find((s) => s.id === solId);
+    registrarLlegadaPunto(solId, {
+      horaLlegada: hora,
+      llegadaTsISO: now.toISOString(),
+      geoStr: geo,
+      autor: chofer.nombre,
+      statusLogPrevio: sol?.statusLog || [],
     });
   }
 
-  // ── GPS en segundo plano real ────────────────────────────────────────────
+  // ── GPS en segundo plano real ───────────────────────────────────────────
   // A diferencia de la Fase 1 (Geolocation.watchPosition, que se corta con la
   // pantalla apagada), esto usa un foreground service Android real: mientras
   // el chofer tenga sesión activa, aparece una notificación fija en la barra
@@ -219,15 +232,27 @@ export default function VistaChofer({ chofer, solicitudes, onCerrado, onSalir })
     };
   }, [chofer.ppu, chofer.nombre]);
 
+  // Botón manual "Llegué al punto de entrega". Además del estado local (que
+  // arranca el cronómetro visible en este celular), ahora también persiste
+  // "En Punto Cliente" + el timestamp real en Supabase -- antes esto solo
+  // vivía en memoria/localStorage del celular y nunca llegaba al servidor,
+  // por lo que ni el admin ni la alerta de "carga no preparada en andén"
+  // se enteraban jamás de que el chofer había llegado.
   function registrarLlegada(solId) {
     const now = new Date();
     const hora = now.toLocaleDateString("es-CL") + " " + now.toLocaleTimeString("es-CL", { hour: "2-digit", minute: "2-digit", hour12: false });
+    const llegadaTsISO = now.toISOString();
+    const sol = solicitudesRef.current.find((s) => s.id === solId);
     Geolocation.getCurrentPosition({ enableHighAccuracy: true, timeout: 15000 })
       .then((pos) => {
         const geo = pos.coords.latitude.toFixed(6) + "," + pos.coords.longitude.toFixed(6);
         setLlegadas((p) => ({ ...p, [solId]: { hora, timestamp: now.getTime(), geo } }));
+        registrarLlegadaPunto(solId, { horaLlegada: hora, llegadaTsISO, geoStr: geo, autor: chofer.nombre, statusLogPrevio: sol?.statusLog || [] });
       })
-      .catch(() => setLlegadas((p) => ({ ...p, [solId]: { hora, timestamp: now.getTime(), geo: null } })));
+      .catch(() => {
+        setLlegadas((p) => ({ ...p, [solId]: { hora, timestamp: now.getTime(), geo: null } }));
+        registrarLlegadaPunto(solId, { horaLlegada: hora, llegadaTsISO, geoStr: null, autor: chofer.nombre, statusLogPrevio: sol?.statusLog || [] });
+      });
     timerRef.current[solId] = setInterval(() => {
       setTiempos((p) => ({ ...p, [solId]: Math.floor((Date.now() - now.getTime()) / 1000) }));
     }, 1000);
@@ -290,7 +315,7 @@ export default function VistaChofer({ chofer, solicitudes, onCerrado, onSalir })
     const ok = await cerrarSolicitud(id, {
       nuevoEstado,
       statusLabel,
-      statusLogPrevio: [],
+      statusLogPrevio: sol.statusLog || [],
       autor: chofer.nombre,
       fotosDoc: esCargaOL ? [] : fotos[id] || [],
       fotosManifiesto: esCargaOL ? fotosManifiesto[id] || [] : [],
@@ -319,7 +344,7 @@ export default function VistaChofer({ chofer, solicitudes, onCerrado, onSalir })
 
   async function marcarEnTransito(sol) {
     setCargando(sol.id + "en_proceso");
-    const ok = await actualizarEstadoSolicitud(sol.id, "en_proceso", [], chofer.nombre);
+    const ok = await actualizarEstadoSolicitud(sol.id, "en_proceso", sol.statusLog || [], chofer.nombre);
     setCargando(null);
     if (ok) onCerrado(sol.id, "en_proceso");
     else alert("No se pudo actualizar el estado. Revisa tu conexión e inténtalo de nuevo.");
