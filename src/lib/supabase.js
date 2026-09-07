@@ -87,12 +87,17 @@ export async function guardarPushToken(choferNombre, token) {
 // VistaChofer en la app web: ppuAsignada o choferAsignado, fecha de hoy,
 // estado pendiente o en_proceso).
 export async function loadSolicitudesChofer(choferNombre, ppu) {
-  const hoy = new Date().toISOString().split("T")[0];
+  // Fecha LOCAL (Chile), no UTC: toISOString() usa UTC y en Chile (UTC-3/-4)
+  // eso hace que, desde aprox. las 20:00-21:00 hora local en adelante, "hoy"
+  // ya cuente como el día siguiente en UTC -- una solicitud creada esa misma
+  // tarde/noche con fecha de HOY (correcta) dejaba de aparecer para el
+  // chofer. Mismo bug y mismo fix que ya se aplicó en la app web.
+  const hoy = new Date().toLocaleDateString("en-CA");
   const data = await sbFetch(
     "GET",
     "solicitudes",
     "",
-    `?select=id,ot,tipo,titulo,descripcion,direccion,fecha,hora,contacto,guia,destino,status,documentos,notas,ppu_asignada,chofer_asignado,destino_lat,destino_lng&fecha=eq.${hoy}&status=in.(pendiente,en_proceso)`
+    `?select=id,ot,tipo,titulo,descripcion,direccion,fecha,hora,contacto,guia,destino,status,documentos,notas,ppu_asignada,chofer_asignado,destino_lat,destino_lng,status_log&fecha=eq.${hoy}&status=in.(pendiente,en_proceso,en_punto_cliente)`
   );
   if (!data) return [];
   return data
@@ -112,6 +117,7 @@ export async function loadSolicitudesChofer(choferNombre, ppu) {
       status: s.status,
       documentos: s.documentos,
       notas: s.notas,
+      statusLog: s.status_log || [],
       destinoLat: typeof s.destino_lat === "number" ? s.destino_lat : null,
       destinoLng: typeof s.destino_lng === "number" ? s.destino_lng : null,
     }));
@@ -133,6 +139,55 @@ export async function actualizarEstadoSolicitud(id, nuevoEstado, statusLogPrevio
   });
   if (!res.ok) {
     console.error("actualizarEstadoSolicitud error:", await res.text());
+    return false;
+  }
+  return true;
+}
+
+// Marca automáticamente el estado "En Punto Cliente" apenas el chofer llega
+// al punto de entrega/retiro -- por botón manual (registrarLlegada) o por
+// geocerca automática (registrarLlegadaAuto), en VistaChofer.jsx. Antes esta
+// app solo guardaba la llegada en memoria/localStorage del celular: nunca le
+// avisaba a Supabase, así que ni el admin (Detalle, Bitácora/Flujo) ni la
+// alerta de "carga no preparada en andén" se enteraban de nada. Ahora
+// persiste lo mismo que hace handleChoferLlegada en la app web:
+//   - status = "en_punto_cliente"
+//   - llegada_ts = timestamp real (ISO), para calcular minutos transcurridos
+//     server-side (Edge Function de alerta) y mostrar el cronómetro en vivo
+//     en el Detalle del admin.
+//   - alerta_anden_enviada = false, por si esta guía ya había disparado una
+//     alerta en una gestión anterior y vuelve a marcar llegada de nuevo.
+export async function registrarLlegadaPunto(id, { horaLlegada, llegadaTsISO, geoStr = null, autor = null, statusLogPrevio = [] }) {
+  const entry = {
+    id: Date.now().toString(),
+    de: "en_proceso",
+    a: "En Punto Cliente",
+    fechaHora: horaLlegada,
+    canceladoPor: null,
+    geo: geoStr || "Sin geolocalización",
+    usuario: autor || "Chofer (app)",
+  };
+  const log = [...(statusLogPrevio || []), entry];
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/solicitudes?id=eq.${id}`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      apikey: SUPABASE_KEY,
+      Authorization: `Bearer ${SUPABASE_KEY}`,
+      Prefer: "return=minimal",
+    },
+    body: JSON.stringify({
+      status: "en_punto_cliente",
+      status_log: log,
+      llegada_ts: llegadaTsISO,
+      hora_llegada: horaLlegada,
+      alerta_anden_enviada: false,
+      alerta_anden_enviada_en: null,
+      updated_at: new Date().toISOString(),
+    }),
+  });
+  if (!res.ok) {
+    console.error("registrarLlegadaPunto error:", await res.text());
     return false;
   }
   return true;
